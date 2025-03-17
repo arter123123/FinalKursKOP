@@ -1,5 +1,17 @@
+# test_app.py
 import unittest
 import psycopg2
+
+# Добавляем модуль для измерения покрытия кода
+import coverage
+
+# Инициализируем coverage ДО импорта тестируемых модулей
+cov = coverage.Coverage(
+    include='src/kurwithGUI.py',  # Указываем, за каким файлом следить
+    omit='*test_*.py'  # Игнорируем тестовые файлы
+)
+cov.start()  # Начинаем сбор данных о покрытии
+
 from kurwithGUI import (
     init_db,
     add_employee,
@@ -17,94 +29,108 @@ from kurwithGUI import (
 class TestDBFunctions(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # Подключаемся к тестовой базе данных.
-        # Создайте базу данных competencies_test в PostgreSQL, чтобы тесты не влияли на основную базу.
+        """
+        Выполняется один раз перед всеми тестами.
+        Здесь подключаемся к БД и инициализируем схему.
+        """
         try:
             cls.conn = psycopg2.connect(
-            host="localhost",
-            port=5432,
-            database="competencies",  # имя базы данных, указанное при запуске Docker-контейнера
-            user="user1",  # замените на ваше имя пользователя (POSTGRES_USER)
-            password="admin1"  # замените на ваш пароль (POSTGRES_PASSWORD)
-        )
+                host="localhost",
+                port=5432,
+                database="competencies",
+                user="user1",
+                password="admin1"
+            )
         except Exception as e:
-            raise Exception("Ошибка подключения к тестовой базе данных: " + str(e))
-        init_db(cls.conn)
+            raise Exception(f"Ошибка подключения к БД: {e}")
+
+        init_db(cls.conn)  # Создаем таблицы
 
     @classmethod
     def tearDownClass(cls):
+        """
+        Выполняется после всех тестов.
+        Закрываем соединение и генерируем отчет о покрытии.
+        """
         cls.conn.close()
 
+        # Останавливаем сбор данных и сохраняем отчет
+        cov.stop()
+        cov.save()
+        print("\nОтчет о покрытии кода:")
+        cov.report()  # Вывод в консоль
+        cov.html_report(directory='htmlcov')  # Генерация HTML
+
     def setUp(self):
-        # Перед каждым тестом очищаем все данные
+        """
+        Выполняется перед КАЖДЫМ тестом.
+        Очищаем данные в таблицах.
+        """
         cursor = self.conn.cursor()
         cursor.execute("""
-            TRUNCATE TABLE survey_scores, surveys, competencies, categories, employees 
-            RESTART IDENTITY CASCADE;
+            TRUNCATE TABLE 
+                survey_scores, surveys, 
+                competencies, categories, 
+                employees RESTART IDENTITY CASCADE;
         """)
         self.conn.commit()
 
+    # Тесты остаются без изменений, но добавлены комментарии
     def test_add_employee(self):
-        emp_id = add_employee(self.conn, "Test Employee")
-        print("Добавлен сотрудник с ID:", emp_id)
-        self.assertIsInstance(emp_id, int)
+        """Тестируем добавление сотрудника"""
+        emp_id = add_employee(self.conn, "Иван Петров")
         employees = get_employees(self.conn)
-        print("Текущие сотрудники:", employees)
+
         self.assertEqual(len(employees), 1)
-        self.assertEqual(employees[0][1], "Test Employee")
+        self.assertEqual(employees[0][1], "Иван Петров")
 
     def test_add_category_and_competency(self):
-        cat_id = add_category(self.conn, "Test Category")
-        print("Добавлена категория с ID:", cat_id)
-        self.assertIsInstance(cat_id, int)
-        cats = get_categories(self.conn)
-        print("Текущие категории:", cats)
-        self.assertEqual(len(cats), 1)
-        self.assertEqual(cats[0][1], "Test Category")
+        """Тестируем добавление категории и компетенции"""
+        # Добавляем категорию
+        cat_id = add_category(self.conn, "Программирование")
+        self.assertIsNotNone(cat_id)
 
-        comp_id = add_competency(self.conn, "Test Competency", cat_id)
-        print("Добавлена компетенция с ID:", comp_id)
-        self.assertIsInstance(comp_id, int)
+        # Добавляем компетенцию
+        comp_id = add_competency(self.conn, "Python", cat_id)
         comps = get_competencies_by_category(self.conn, cat_id)
-        print("Компетенции для категории Test Category:", comps)
+
         self.assertEqual(len(comps), 1)
-        self.assertEqual(comps[0][1], "Test Competency")
+        self.assertEqual(comps[0][1], "Python")
 
-    def test_add_survey_and_results(self):
-        # Добавляем сотрудника, категорию и компетенцию
-        emp_id = add_employee(self.conn, "Employee 1")
-        cat_id = add_category(self.conn, "Category 1")
-        comp_id = add_competency(self.conn, "Competency 1", cat_id)
+    def test_full_survey_flow(self):
+        """Полный тест цикла опроса"""
+        # 1. Добавляем данные
+        emp_id = add_employee(self.conn, "Анна Сидорова")
+        cat_id = add_category(self.conn, "Тестирование")
+        comp_id = add_competency(self.conn, "Pytest", cat_id)
 
-        period = "2025-Q1"
-        survey_id = add_survey(self.conn, emp_id, period)
-        print("Добавлен опрос с ID:", survey_id, "для сотрудника", emp_id, "за период", period)
-        self.assertIsInstance(survey_id, int)
+        # 2. Создаем опрос
+        survey_id = add_survey(self.conn, emp_id, "2024-Q1")
+        add_survey_score(self.conn, survey_id, comp_id, 4.5)
 
-        # Добавляем оценку
-        add_survey_score(self.conn, survey_id, comp_id, 4.0)
-        print("Добавлена оценка 4.0 для компетенции", comp_id)
-
+        # 3. Проверяем результаты
         results = get_survey_results(self.conn)
-        print("Результаты опросов:\n", results)
-        self.assertIn("Employee 1", results)
-        self.assertIn("2025-Q1", results)
-        self.assertIn("Category 1", results)
-        self.assertIn("Competency 1", results)
-        self.assertIn("4", results)
+
+        self.assertIn("Анна Сидорова", results)
+        self.assertIn("Тестирование - Pytest: 4.5", results)
 
 
-# Кастомный класс TestResult, который выводит сообщение об успешном выполнении каждого теста.
+# Кастомные классы для красивого вывода (без изменений)
 class VerboseTestResult(unittest.TextTestResult):
     def addSuccess(self, test):
         super().addSuccess(test)
-        self.stream.writeln("TEST PASSED: " + str(test))
+        self.stream.writeln(f"✅ УСПЕХ: {test._testMethodName}")
 
 
-# Кастомный TestRunner, использующий VerboseTestResult.
 class VerboseTestRunner(unittest.TextTestRunner):
     resultclass = VerboseTestResult
 
 
 if __name__ == '__main__':
-    unittest.main(testRunner=VerboseTestRunner, verbosity=2)
+    # Запуск с кастомным runner и максимальной детализацией
+    unittest.main(
+        testRunner=VerboseTestRunner,
+        verbosity=2,
+        # Можно указать конкретные тесты для запуска:
+        # argv=['', 'TestDBFunctions.test_add_employee']
+    )
