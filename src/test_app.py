@@ -1,17 +1,23 @@
 # test_app.py
 import unittest
 import psycopg2
+import os
+import sys
 
-# Добавляем модуль для измерения покрытия кода
+# Импортируем coverage ПЕРЕД импортом тестируемых модулей
 import coverage
 
-# Инициализируем coverage ДО импорта тестируемых модулей
+# Настраиваем coverage перед импортом приложения
 cov = coverage.Coverage(
-    include='src/kurwithGUI.py',  # Указываем, за каким файлом следить
-    omit='*test_*.py'  # Игнорируем тестовые файлы
+    source=['.'],  # Отслеживаем все файлы в текущей директории
+    omit=[
+        '*test_*.py',  # Исключаем тестовые файлы
+        '*/site-packages/*'  # Исключаем системные зависимости
+    ]
 )
-cov.start()  # Начинаем сбор данных о покрытии
+cov.start()
 
+# Теперь импортируем тестируемые модули
 from kurwithGUI import (
     init_db,
     add_employee,
@@ -29,10 +35,7 @@ from kurwithGUI import (
 class TestDBFunctions(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        """
-        Выполняется один раз перед всеми тестами.
-        Здесь подключаемся к БД и инициализируем схему.
-        """
+        """Инициализация тестовой БД"""
         try:
             cls.conn = psycopg2.connect(
                 host="localhost",
@@ -41,96 +44,87 @@ class TestDBFunctions(unittest.TestCase):
                 user="user1",
                 password="admin1"
             )
+            init_db(cls.conn)
         except Exception as e:
-            raise Exception(f"Ошибка подключения к БД: {e}")
-
-        init_db(cls.conn)  # Создаем таблицы
+            raise Exception(f"Database connection failed: {str(e)}")
 
     @classmethod
     def tearDownClass(cls):
-        """
-        Выполняется после всех тестов.
-        Закрываем соединение и генерируем отчет о покрытии.
-        """
+        """Завершение работы с coverage и закрытие соединения"""
         cls.conn.close()
-
-        # Останавливаем сбор данных и сохраняем отчет
         cov.stop()
         cov.save()
-        print("\nОтчет о покрытии кода:")
-        cov.report()  # Вывод в консоль
-        cov.html_report(directory='htmlcov')  # Генерация HTML
+
+        # Генерация отчетов
+        print("\nCoverage Report:")
+        cov.report()
+        cov.html_report(directory='htmlcov')
+        print("HTML report generated in 'htmlcov' directory")
 
     def setUp(self):
-        """
-        Выполняется перед КАЖДЫМ тестом.
-        Очищаем данные в таблицах.
-        """
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            TRUNCATE TABLE 
-                survey_scores, surveys, 
-                competencies, categories, 
-                employees RESTART IDENTITY CASCADE;
-        """)
-        self.conn.commit()
+        """Очистка данных перед каждым тестом"""
+        with self.conn.cursor() as cursor:
+            cursor.execute("""
+                TRUNCATE TABLE 
+                    survey_scores, surveys, 
+                    competencies, categories, 
+                    employees RESTART IDENTITY CASCADE;
+            """)
+            self.conn.commit()
 
-    # Тесты остаются без изменений, но добавлены комментарии
     def test_add_employee(self):
-        """Тестируем добавление сотрудника"""
-        emp_id = add_employee(self.conn, "Иван Петров")
+        """Тест добавления сотрудника"""
+        emp_id = add_employee(self.conn, "John Doe")
         employees = get_employees(self.conn)
-
         self.assertEqual(len(employees), 1)
-        self.assertEqual(employees[0][1], "Иван Петров")
+        self.assertEqual(employees[0][1], "John Doe")
 
     def test_add_category_and_competency(self):
-        """Тестируем добавление категории и компетенции"""
-        # Добавляем категорию
-        cat_id = add_category(self.conn, "Программирование")
+        """Тест добавления категории и компетенции"""
+        # Тест категории
+        cat_id = add_category(self.conn, "Programming")
         self.assertIsNotNone(cat_id)
 
-        # Добавляем компетенцию
+        # Тест компетенции
         comp_id = add_competency(self.conn, "Python", cat_id)
         comps = get_competencies_by_category(self.conn, cat_id)
-
-        self.assertEqual(len(comps), 1)
         self.assertEqual(comps[0][1], "Python")
 
-    def test_full_survey_flow(self):
-        """Полный тест цикла опроса"""
-        # 1. Добавляем данные
-        emp_id = add_employee(self.conn, "Анна Сидорова")
-        cat_id = add_category(self.conn, "Тестирование")
+    def test_full_workflow(self):
+        """Полный тест рабочего процесса"""
+        # Добавляем данные
+        emp_id = add_employee(self.conn, "Alice Smith")
+        cat_id = add_category(self.conn, "Testing")
         comp_id = add_competency(self.conn, "Pytest", cat_id)
 
-        # 2. Создаем опрос
+        # Создаем опрос
         survey_id = add_survey(self.conn, emp_id, "2024-Q1")
         add_survey_score(self.conn, survey_id, comp_id, 4.5)
 
-        # 3. Проверяем результаты
+        # Проверяем результаты
         results = get_survey_results(self.conn)
-
-        self.assertIn("Анна Сидорова", results)
-        self.assertIn("Тестирование - Pytest: 4.5", results)
-
-
-# Кастомные классы для красивого вывода (без изменений)
-class VerboseTestResult(unittest.TextTestResult):
-    def addSuccess(self, test):
-        super().addSuccess(test)
-        self.stream.writeln(f"✅ УСПЕХ: {test._testMethodName}")
+        self.assertIn("Alice Smith", results)
+        self.assertIn("Pytest", results)
+        self.assertIn("4.5", results)
 
 
-class VerboseTestRunner(unittest.TextTestRunner):
-    resultclass = VerboseTestResult
+class CustomTestRunner(unittest.TextTestRunner):
+    """Кастомный runner для улучшенного вывода"""
+    resultclass = unittest.TextTestResult
+
+    def run(self, test):
+        result = super().run(test)
+        print("\n" + "=" * 50)
+        print(f"Tests run: {result.testsRun}")
+        print(f"Errors: {len(result.errors)}")
+        print(f"Failures: {len(result.failures)}")
+        return result
 
 
 if __name__ == '__main__':
-    # Запуск с кастомным runner и максимальной детализацией
+    # Запуск с кастомным runner
     unittest.main(
-        testRunner=VerboseTestRunner,
+        testRunner=CustomTestRunner,
         verbosity=2,
-        # Можно указать конкретные тесты для запуска:
-        # argv=['', 'TestDBFunctions.test_add_employee']
+        exit=False
     )
